@@ -35,6 +35,7 @@ export function parseEmissoSandboxStdoutLine(line: string, ts: string): Transcri
     }
 
     if (event.type === "user" && event.message?.content) {
+      const toolResults: TranscriptEntry[] = [];
       for (const block of event.message.content) {
         if (block.type === "tool_result") {
           const content =
@@ -47,15 +48,16 @@ export function parseEmissoSandboxStdoutLine(line: string, ts: string): Transcri
                     .join("\n")
                     .substring(0, 500)
                 : "";
-          return [{
+          toolResults.push({
             kind: "tool_result",
             ts,
             toolUseId: block.tool_use_id ?? "",
             content,
             isError: block.is_error === true,
-          }];
+          });
         }
       }
+      if (toolResults.length > 0) return toolResults;
     }
 
     if (event.type === "result") {

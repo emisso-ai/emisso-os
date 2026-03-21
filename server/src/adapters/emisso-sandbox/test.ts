@@ -59,14 +59,14 @@ export async function testEnvironment(
   } else if (!isNonEmpty(vercelToken) && !isNonEmpty(vercelTeamId)) {
     checks.push({
       code: "sandbox_vercel_auth_missing",
-      level: "warn",
-      message: "Vercel authentication not configured. Sandbox creation may rely on OIDC (Vercel-hosted only).",
-      hint: "Set VERCEL_TOKEN and VERCEL_TEAM_ID for non-Vercel environments.",
+      level: "error",
+      message: "Vercel authentication not configured. Sandbox creation will fail.",
+      hint: "Set VERCEL_TOKEN and VERCEL_TEAM_ID in the environment or adapterConfig.",
     });
   } else {
     checks.push({
       code: "sandbox_vercel_auth_partial",
-      level: "warn",
+      level: "error",
       message: "Partial Vercel auth: both VERCEL_TOKEN and VERCEL_TEAM_ID are needed.",
       hint: "Set both values in the environment or adapterConfig.",
     });

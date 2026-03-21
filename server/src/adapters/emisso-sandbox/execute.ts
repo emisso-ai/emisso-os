@@ -91,7 +91,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const additionalRepos = Array.isArray(config.additionalRepos)
     ? (config.additionalRepos as Array<{ repoUrl: string; dirName?: string }>)
     : [];
-  const cloneDepth = asNumber(config.cloneDepth, 1);
+  const cloneDepth = clamp(asNumber(config.cloneDepth, 1), 1, 10000);
   const model = asString(config.model, DEFAULT_MODEL);
   const maxTurns = asNumber(config.maxTurns, DEFAULT_MAX_TURNS);
   const timeoutSec = clamp(asNumber(config.timeoutSec, DEFAULT_TIMEOUT_SEC), MIN_TIMEOUT_SEC, MAX_TIMEOUT_SEC);
@@ -209,6 +209,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       { url: primaryCloneUrl, dirName: primaryDirName },
     ];
     for (const extra of additionalRepos) {
+      if (!extra.repoUrl) {
+        await onLog("stdout", `[emisso-sandbox] WARN: skipping additionalRepo with empty repoUrl\n`);
+        continue;
+      }
       const url = gitAuth ? embedGitCredentials(extra.repoUrl, gitAuth) : extra.repoUrl;
       repos.push({ url, dirName: extra.dirName || extractRepoDirName(extra.repoUrl) });
     }
@@ -253,6 +257,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           content: Buffer.from(content),
         }]);
         await onLog("stdout", `[emisso-sandbox] Instruction file written from ${instructionsFilePath}\n`);
+      } else {
+        await onLog("stdout", `[emisso-sandbox] WARN: instructionsFilePath not found: ${instructionsFilePath} (continuing without instructions)\n`);
       }
     }
 
@@ -271,41 +277,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     // --- 6. Run Claude CLI ---
     await onLog("stdout", `[emisso-sandbox] Running Claude (model=${model}, maxTurns=${maxTurns})...\n`);
 
-    const claudeArgs = [
-      "--print", "-",
-      "--output-format", "stream-json",
-      "--model", model,
-      "--max-turns", String(maxTurns),
-      "--dangerously-skip-permissions",
-      "--verbose",
-    ];
-    if (mcpConfigPath) claudeArgs.push("--mcp-config", mcpConfigPath);
-
-    const cmd = await sandbox.runCommand({
-      cmd: "claude",
-      args: claudeArgs,
-      cwd: WORKSPACE_DIR,
-      env: {
-        ANTHROPIC_API_KEY: anthropicApiKey,
-        CI: "1",
-        CLAUDE_CODE_ENTRYPOINT: "cli",
-        PAPERCLIP_AGENT_ID: agent.id,
-        PAPERCLIP_COMPANY_ID: agent.companyId,
-        PAPERCLIP_RUN_ID: runId,
-      },
-      detached: true,
-    });
-
-    // Stream stdin (the prompt)
-    // Note: The sandbox cmd interface uses stdin via the command itself.
-    // For Claude's `--print -` mode, we write the prompt via a runner script approach.
-    // Since we can't pipe stdin directly, we use a runner script.
-
-    // Actually, let's use a runner script like emisso-hq does
-    // to handle stdin properly with the `claude` CLI.
-    // Kill the detached process and re-run via runner script.
-    await cmd.kill("SIGTERM");
-
+    // Use a runner script to pipe the prompt via stdin to Claude's `--print -` mode,
+    // since the sandbox cmd interface doesn't support direct stdin piping.
     const runnerScript = buildRunnerScript(prompt, model, maxTurns, mcpConfigPath);
     await sandbox.writeFiles([{
       path: "/vercel/sandbox/runner.mjs",
@@ -327,10 +300,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       detached: true,
     });
 
-    // Stream logs to the UI in real-time
+    // Stream logs to the UI in real-time.
+    // Cap accumulated stdout to avoid unbounded memory growth on long sessions.
+    const MAX_STDOUT_BYTES = 5 * 1024 * 1024; // 5 MB
     let fullStdout = "";
     for await (const log of runnerCmd.logs()) {
-      if (log.stream === "stdout") {
+      if (log.stream === "stdout" && fullStdout.length < MAX_STDOUT_BYTES) {
         fullStdout += log.data;
       }
       await onLog(log.stream, log.data);
@@ -344,7 +319,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     if (finished.exitCode !== 0 && !parsed.resultJson) {
       const stderr = await finished.stderr();
-      const isTimeout = stderr.includes("ETIMEDOUT") || stderr.includes("timed out");
+      const isTimeout = stderr.includes("ETIMEDOUT") || stderr.includes("timed out") || stderr.includes("TimeoutError") || stderr.includes("SandboxTimeoutError") || stderr.includes("408") || stderr.includes("504");
 
       return {
         exitCode: finished.exitCode,
@@ -387,7 +362,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   } catch (err) {
     const durationMs = Date.now() - startTime;
     const message = err instanceof Error ? err.message : String(err);
-    const isTimeout = message.includes("AbortError") || message.includes("timed out");
+    const isTimeout = message.includes("AbortError") || message.includes("timed out") || message.includes("TimeoutError") || message.includes("SandboxTimeoutError");
 
     return {
       exitCode: 1,
@@ -433,7 +408,7 @@ const prompt = ${escapedPrompt};
 const model = ${JSON.stringify(model)};
 
 const args = [
-  "--print",
+  "--print", "-",
   "--verbose",
   "--output-format", "stream-json",
   "--model", model,
@@ -452,6 +427,11 @@ const proc = spawn("claude", args, {
   },
 });
 
+proc.on("error", (err) => {
+  process.stderr.write("Failed to start claude: " + err.message + "\\n");
+  process.exit(1);
+});
+proc.stdin.on("error", () => {});
 proc.stdin.write(prompt);
 proc.stdin.end();
 proc.on("close", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));

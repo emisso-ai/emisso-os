@@ -427,6 +427,11 @@ const proc = spawn("claude", args, {
   },
 });
 
+proc.on("error", (err) => {
+  process.stderr.write("Failed to start claude: " + err.message + "\\n");
+  process.exit(1);
+});
+proc.stdin.on("error", () => {});
 proc.stdin.write(prompt);
 proc.stdin.end();
 proc.on("close", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));

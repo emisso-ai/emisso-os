@@ -165,7 +165,15 @@ export function EmissoSandboxConfigFields({
               config.mcpServers ? JSON.stringify(config.mcpServers, null, 2) : "",
             )}
             onChange={(e) => {
+              // Always store raw text for display
               mark("adapterConfig", "mcpServersJson", e.target.value);
+              // When valid JSON, also update the actual mcpServers key the server reads
+              try {
+                const parsed = e.target.value.trim() ? JSON.parse(e.target.value) : undefined;
+                mark("adapterConfig", "mcpServers", parsed);
+              } catch {
+                // Keep raw text until valid — server ignores mcpServersJson
+              }
             }}
             placeholder={'{\n  "github": {\n    "command": "mcp-server-github"\n  }\n}'}
           />

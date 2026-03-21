@@ -112,12 +112,19 @@ export function embedGitCredentials(
   url: string,
   auth: { username: string; token: string },
 ): string {
+  if (url.startsWith("git@") || url.includes("ssh://")) {
+    throw new Error(
+      `SSH clone URLs are not supported for credential embedding. Use an HTTPS URL instead: ${url}`,
+    );
+  }
   try {
     const parsed = new URL(url);
     parsed.username = encodeURIComponent(auth.username);
     parsed.password = encodeURIComponent(auth.token);
     return parsed.toString();
   } catch {
-    return url;
+    throw new Error(
+      `Invalid clone URL — could not parse for credential embedding: ${url}`,
+    );
   }
 }

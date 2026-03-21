@@ -61,13 +61,29 @@ export function parseEmissoSandboxStdoutLine(line: string, ts: string): Transcri
     }
 
     if (event.type === "result") {
+      // Extract token counts from modelUsage (aggregated across models) or top-level usage
+      let inputTokens = 0;
+      let outputTokens = 0;
+      let cachedTokens = 0;
+      if (event.modelUsage && typeof event.modelUsage === "object") {
+        for (const model of Object.values(event.modelUsage) as Record<string, number>[]) {
+          inputTokens += model.inputTokens ?? 0;
+          outputTokens += model.outputTokens ?? 0;
+          cachedTokens += model.cacheReadInputTokens ?? 0;
+        }
+      } else if (event.usage) {
+        inputTokens = event.usage.input_tokens ?? 0;
+        outputTokens = event.usage.output_tokens ?? 0;
+        cachedTokens = event.usage.cache_read_input_tokens ?? 0;
+      }
+
       return [{
         kind: "result",
         ts,
         text: typeof event.result === "string" ? event.result : JSON.stringify(event),
-        inputTokens: 0,
-        outputTokens: 0,
-        cachedTokens: 0,
+        inputTokens,
+        outputTokens,
+        cachedTokens,
         costUsd: typeof event.total_cost_usd === "number" ? event.total_cost_usd : 0,
         subtype: "result",
         isError: false,
